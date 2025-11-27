@@ -30,6 +30,7 @@ export const myProvider = isTestEnvironment
           model: openai.responses("gpt-5.1"),
           middleware: extractReasoningMiddleware({ tagName: "think" }),
         }),
+        "doc-chat": openai.responses("gpt-5"),
         "title-model": openai.responses("gpt-5-mini"),
         "artifact-model": openai.responses("gpt-5-mini"),
       },

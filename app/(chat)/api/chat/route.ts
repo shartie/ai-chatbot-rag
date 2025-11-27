@@ -25,6 +25,7 @@ import { myProvider } from "@/lib/ai/providers";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
+import { searchDocuments, getDocument } from "@/lib/ai/tools/search-documents";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
@@ -177,15 +178,75 @@ export async function POST(request: Request) {
 
     let finalMergedUsage: AppUsage | undefined;
 
+    // Determine model type for tool configuration
+    const isDocChat = selectedChatModel === "doc-chat";
+    const isReasoningModel = selectedChatModel === "chat-model-reasoning";
+
     const stream = createUIMessageStream({
       execute: ({ writer: dataStream }) => {
-        const result = streamText({
-          model: myProvider.languageModel(selectedChatModel),
-          system: systemPrompt({ selectedChatModel, requestHints }),
-          messages: convertToModelMessages(uiMessages),
-          stopWhen: stepCountIs(5),
-          experimental_activeTools:
-            selectedChatModel === "chat-model-reasoning"
+        const onFinishHandler = async ({ usage }: { usage: AppUsage }) => {
+          try {
+            const providers = await getTokenlensCatalog();
+            const modelId =
+              myProvider.languageModel(selectedChatModel).modelId;
+            if (!modelId) {
+              finalMergedUsage = usage;
+              dataStream.write({
+                type: "data-usage",
+                data: finalMergedUsage,
+              });
+              return;
+            }
+
+            if (!providers) {
+              finalMergedUsage = usage;
+              dataStream.write({
+                type: "data-usage",
+                data: finalMergedUsage,
+              });
+              return;
+            }
+
+            const summary = getUsage({ modelId, usage, providers });
+            finalMergedUsage = { ...usage, ...summary, modelId } as AppUsage;
+            dataStream.write({ type: "data-usage", data: finalMergedUsage });
+          } catch (err) {
+            console.warn("TokenLens enrichment failed", err);
+            finalMergedUsage = usage;
+            dataStream.write({ type: "data-usage", data: finalMergedUsage });
+          }
+        };
+
+        // Use different tool configurations based on model type
+        let result;
+
+        if (isDocChat) {
+          // Doc Chat Agent: uses document search tools with more steps
+          result = streamText({
+            model: myProvider.languageModel(selectedChatModel),
+            system: systemPrompt({ selectedChatModel, requestHints }),
+            messages: convertToModelMessages(uiMessages),
+            stopWhen: stepCountIs(10),
+            experimental_activeTools: ["searchDocuments", "getDocument"],
+            experimental_transform: smoothStream({ chunking: "word" }),
+            tools: {
+              searchDocuments,
+              getDocument,
+            },
+            experimental_telemetry: {
+              isEnabled: isProductionEnvironment,
+              functionId: "stream-text",
+            },
+            onFinish: onFinishHandler,
+          });
+        } else {
+          // Default chat models: use standard tools
+          result = streamText({
+            model: myProvider.languageModel(selectedChatModel),
+            system: systemPrompt({ selectedChatModel, requestHints }),
+            messages: convertToModelMessages(uiMessages),
+            stopWhen: stepCountIs(5),
+            experimental_activeTools: isReasoningModel
               ? []
               : [
                   "getWeather",
@@ -193,53 +254,20 @@ export async function POST(request: Request) {
                   "updateDocument",
                   "requestSuggestions",
                 ],
-          experimental_transform: smoothStream({ chunking: "word" }),
-          tools: {
-            getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
-            requestSuggestions: requestSuggestions({
-              session,
-              dataStream,
-            }),
-          },
-          experimental_telemetry: {
-            isEnabled: isProductionEnvironment,
-            functionId: "stream-text",
-          },
-          onFinish: async ({ usage }) => {
-            try {
-              const providers = await getTokenlensCatalog();
-              const modelId =
-                myProvider.languageModel(selectedChatModel).modelId;
-              if (!modelId) {
-                finalMergedUsage = usage;
-                dataStream.write({
-                  type: "data-usage",
-                  data: finalMergedUsage,
-                });
-                return;
-              }
-
-              if (!providers) {
-                finalMergedUsage = usage;
-                dataStream.write({
-                  type: "data-usage",
-                  data: finalMergedUsage,
-                });
-                return;
-              }
-
-              const summary = getUsage({ modelId, usage, providers });
-              finalMergedUsage = { ...usage, ...summary, modelId } as AppUsage;
-              dataStream.write({ type: "data-usage", data: finalMergedUsage });
-            } catch (err) {
-              console.warn("TokenLens enrichment failed", err);
-              finalMergedUsage = usage;
-              dataStream.write({ type: "data-usage", data: finalMergedUsage });
-            }
-          },
-        });
+            experimental_transform: smoothStream({ chunking: "word" }),
+            tools: {
+              getWeather,
+              createDocument: createDocument({ session, dataStream }),
+              updateDocument: updateDocument({ session, dataStream }),
+              requestSuggestions: requestSuggestions({ session, dataStream }),
+            },
+            experimental_telemetry: {
+              isEnabled: isProductionEnvironment,
+              functionId: "stream-text",
+            },
+            onFinish: onFinishHandler,
+          });
+        }
 
         result.consumeStream();
 

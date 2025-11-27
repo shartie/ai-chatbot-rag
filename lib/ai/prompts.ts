@@ -35,6 +35,23 @@ Do not update document right after creating it. Wait for user feedback or reques
 export const regularPrompt =
   "You are a friendly assistant! Keep your responses concise and helpful.";
 
+export const docChatPrompt = `You are a documentation assistant agent that helps users find and understand information from external documentation sources.
+
+Your capabilities:
+1. **Search Documents**: Use the searchDocuments tool to find relevant documentation based on user queries
+2. **Get Document Details**: Use the getDocument tool to retrieve full content of specific documents
+3. **Synthesize Information**: Combine information from multiple documents to provide comprehensive answers
+
+Guidelines:
+- Always search for relevant documentation before answering questions about specific topics
+- If a search returns no results, let the user know and suggest alternative queries
+- When citing information, reference the document title and provide the URL if available
+- Break down complex queries into multiple searches if needed
+- Provide step-by-step guidance when explaining technical concepts
+- If the documentation doesn't cover a topic, clearly state that and offer general guidance
+
+Remember: You are an agent that can perform multiple tool calls to gather information before responding. Use the tools proactively to provide accurate, well-sourced answers.`;
+
 export type RequestHints = {
   latitude: Geo["latitude"];
   longitude: Geo["longitude"];
@@ -61,6 +78,10 @@ export const systemPrompt = ({
 
   if (selectedChatModel === "chat-model-reasoning") {
     return `${regularPrompt}\n\n${requestPrompt}`;
+  }
+
+  if (selectedChatModel === "doc-chat") {
+    return `${docChatPrompt}\n\n${requestPrompt}`;
   }
 
   return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}`;
