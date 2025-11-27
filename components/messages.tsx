@@ -2,14 +2,15 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { AnimatePresence } from "framer-motion";
 import { ArrowDownIcon } from "lucide-react";
-import { memo, useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, SearchProgressData } from "@/lib/types";
 import { useDataStream } from "./data-stream-provider";
 import { Conversation, ConversationContent } from "./elements/conversation";
 import { Greeting } from "./greeting";
 import { PreviewMessage, ThinkingMessage } from "./message";
+import { SearchProgress } from "./search-progress";
 
 type MessagesProps = {
   chatId: string;
@@ -43,7 +44,30 @@ function PureMessages({
     status,
   });
 
-  useDataStream();
+  const { dataStream } = useDataStream();
+
+  // Extract the latest search progress from the data stream
+  const searchProgress = useMemo(() => {
+    if (!dataStream || dataStream.length === 0) return null;
+
+    // Find the most recent search progress event
+    for (let i = dataStream.length - 1; i >= 0; i--) {
+      const part = dataStream[i];
+      if (part.type === "data-searchProgress") {
+        return part.data as SearchProgressData;
+      }
+      // If we hit a searchComplete, the search is done
+      if (part.type === "data-searchComplete") {
+        return null;
+      }
+    }
+    return null;
+  }, [dataStream]);
+
+  const isSearchComplete = useMemo(() => {
+    if (!dataStream || dataStream.length === 0) return false;
+    return dataStream.some((part) => part.type === "data-searchComplete");
+  }, [dataStream]);
 
   useEffect(() => {
     if (status === "submitted") {
@@ -94,6 +118,15 @@ function PureMessages({
           <AnimatePresence mode="wait">
             {status === "submitted" && <ThinkingMessage key="thinking" />}
           </AnimatePresence>
+
+          {/* Show search progress during streaming */}
+          {(status === "streaming" || status === "submitted") &&
+            (searchProgress || isSearchComplete) && (
+              <SearchProgress
+                isComplete={isSearchComplete}
+                progress={searchProgress}
+              />
+            )}
 
           <div
             className="min-h-[24px] min-w-[24px] shrink-0"
