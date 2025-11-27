@@ -6,6 +6,9 @@ const DOC_API_BASE_URL =
   process.env.DOC_API_BASE_URL || "https://api.example.com/docs";
 const DOC_API_KEY = process.env.DOC_API_KEY;
 
+// Enable mock mode when no API key is configured or explicitly set
+const MOCK_MODE = process.env.DOC_SEARCH_MOCK === "true" || !DOC_API_KEY;
+
 export type SearchResult = {
   id: string;
   title: string;
@@ -48,6 +51,124 @@ export type SearchStreamEvent =
 type SearchDocumentsProps = {
   dataStream: UIMessageStreamWriter<ChatMessage>;
 };
+
+/**
+ * Helper to delay execution
+ */
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Mock search function for testing without API
+ */
+async function mockSearch(
+  query: string,
+  limit: number,
+  filter: string | undefined,
+  dataStream: UIMessageStreamWriter<ChatMessage>
+): Promise<SearchResponse> {
+  // Simulate analyzing stage
+  dataStream.write({
+    type: "data-searchProgress",
+    data: {
+      stage: "analyzing",
+      message: "Analyzing search query...",
+      progress: 10,
+    },
+    transient: true,
+  });
+  await delay(800);
+
+  // Simulate filtering stage
+  dataStream.write({
+    type: "data-searchProgress",
+    data: {
+      stage: "filtering",
+      message: filter ? `Applying filter: ${filter}` : "Preparing search filters...",
+      progress: 30,
+    },
+    transient: true,
+  });
+  await delay(600);
+
+  // Simulate searching stage
+  dataStream.write({
+    type: "data-searchProgress",
+    data: {
+      stage: "searching",
+      message: "Searching documentation database...",
+      progress: 50,
+    },
+    transient: true,
+  });
+  await delay(1000);
+
+  // Simulate ranking stage
+  dataStream.write({
+    type: "data-searchProgress",
+    data: {
+      stage: "ranking",
+      message: "Ranking results by relevance...",
+      progress: 80,
+    },
+    transient: true,
+  });
+  await delay(500);
+
+  // Generate mock results based on query
+  const mockResults: SearchResult[] = [
+    {
+      id: "doc-1",
+      title: `Getting Started with ${query}`,
+      content: `This guide covers the basics of ${query}. Learn how to set up your environment and get started quickly with step-by-step instructions.`,
+      url: "https://docs.example.com/getting-started",
+      score: 0.95,
+    },
+    {
+      id: "doc-2",
+      title: `${query} API Reference`,
+      content: `Complete API documentation for ${query}. Includes all available methods, parameters, and response formats with examples.`,
+      url: "https://docs.example.com/api-reference",
+      score: 0.88,
+    },
+    {
+      id: "doc-3",
+      title: `Advanced ${query} Patterns`,
+      content: `Explore advanced patterns and best practices for ${query}. Learn optimization techniques and common pitfalls to avoid.`,
+      url: "https://docs.example.com/advanced",
+      score: 0.82,
+    },
+    {
+      id: "doc-4",
+      title: `Troubleshooting ${query}`,
+      content: `Common issues and solutions when working with ${query}. Debug errors and resolve configuration problems effectively.`,
+      url: "https://docs.example.com/troubleshooting",
+      score: 0.75,
+    },
+    {
+      id: "doc-5",
+      title: `${query} Examples and Tutorials`,
+      content: `Hands-on tutorials and real-world examples demonstrating ${query} in action. Build practical applications step by step.`,
+      url: "https://docs.example.com/tutorials",
+      score: 0.70,
+    },
+  ].slice(0, limit);
+
+  // Write completion event
+  dataStream.write({
+    type: "data-searchComplete",
+    data: {
+      totalResults: mockResults.length,
+      query,
+    },
+    transient: true,
+  });
+
+  return {
+    results: mockResults,
+    query,
+    totalResults: mockResults.length,
+  };
+}
 
 /**
  * Parse SSE stream from the REST API and yield events
@@ -225,6 +346,12 @@ export const searchDocuments = ({ dataStream }: SearchDocumentsProps) =>
     }),
     execute: async ({ query, limit = 5, filter }): Promise<SearchResponse> => {
       try {
+        // Use mock mode for testing without API
+        if (MOCK_MODE) {
+          console.log("[Doc Search] Running in mock mode");
+          return await mockSearch(query, limit, filter, dataStream);
+        }
+
         // Write initial progress event
         dataStream.write({
           type: "data-searchProgress",
