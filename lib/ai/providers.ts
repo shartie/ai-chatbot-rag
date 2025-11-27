@@ -25,12 +25,12 @@ export const myProvider = isTestEnvironment
     })()
   : customProvider({
       languageModels: {
-        "chat-model": openai("gpt-4o"),
+        "chat-model": openai.responses("gpt-5"),
         "chat-model-reasoning": wrapLanguageModel({
-          model: openai("o1-mini"),
+          model: openai.responses("o3-mini"),
           middleware: extractReasoningMiddleware({ tagName: "think" }),
         }),
-        "title-model": openai("gpt-4o-mini"),
-        "artifact-model": openai("gpt-4o-mini"),
+        "title-model": openai.responses("gpt-5-mini"),
+        "artifact-model": openai.responses("gpt-5-mini"),
       },
     });
