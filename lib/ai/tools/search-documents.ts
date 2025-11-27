@@ -9,6 +9,15 @@ const DOC_API_KEY = process.env.DOC_API_KEY;
 // Enable mock mode when no API key is configured or explicitly set
 const MOCK_MODE = process.env.DOC_SEARCH_MOCK === "true" || !DOC_API_KEY;
 
+// Configuration constants
+const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+const MAX_BUFFER_SIZE = 1024 * 1024; // 1MB max buffer for SSE
+const MIN_QUERY_LENGTH = 1;
+const MAX_QUERY_LENGTH = 500;
+const MAX_LIMIT = 50;
+
 export type SearchResult = {
   id: string;
   title: string;
@@ -53,9 +62,73 @@ type SearchDocumentsProps = {
 };
 
 /**
+ * Custom error class for search-specific errors
+ */
+class SearchError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly retryable: boolean = false
+  ) {
+    super(message);
+    this.name = "SearchError";
+  }
+}
+
+/**
  * Helper to delay execution
  */
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Validate search input parameters
+ */
+function validateInput(query: string, limit: number): void {
+  if (!query || typeof query !== "string") {
+    throw new SearchError("Query is required", "INVALID_QUERY");
+  }
+
+  const trimmedQuery = query.trim();
+  if (trimmedQuery.length < MIN_QUERY_LENGTH) {
+    throw new SearchError(
+      `Query must be at least ${MIN_QUERY_LENGTH} character(s)`,
+      "QUERY_TOO_SHORT"
+    );
+  }
+
+  if (trimmedQuery.length > MAX_QUERY_LENGTH) {
+    throw new SearchError(
+      `Query must not exceed ${MAX_QUERY_LENGTH} characters`,
+      "QUERY_TOO_LONG"
+    );
+  }
+
+  if (typeof limit !== "number" || limit < 1) {
+    throw new SearchError("Limit must be a positive number", "INVALID_LIMIT");
+  }
+
+  if (limit > MAX_LIMIT) {
+    throw new SearchError(
+      `Limit must not exceed ${MAX_LIMIT}`,
+      "LIMIT_TOO_HIGH"
+    );
+  }
+}
+
+/**
+ * Create an AbortController with timeout
+ */
+function createTimeoutController(timeoutMs: number): {
+  controller: AbortController;
+  timeoutId: NodeJS.Timeout;
+} {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new SearchError("Request timed out", "TIMEOUT", true));
+  }, timeoutMs);
+
+  return { controller, timeoutId };
+}
 
 /**
  * Mock search function for testing without API
@@ -83,7 +156,9 @@ async function mockSearch(
     type: "data-searchProgress",
     data: {
       stage: "filtering",
-      message: filter ? `Applying filter: ${filter}` : "Preparing search filters...",
+      message: filter
+        ? `Applying filter: ${filter}`
+        : "Preparing search filters...",
       progress: 30,
     },
     transient: true,
@@ -149,7 +224,7 @@ async function mockSearch(
       title: `${query} Examples and Tutorials`,
       content: `Hands-on tutorials and real-world examples demonstrating ${query} in action. Build practical applications step by step.`,
       url: "https://docs.example.com/tutorials",
-      score: 0.70,
+      score: 0.7,
     },
   ].slice(0, limit);
 
@@ -178,7 +253,7 @@ async function* parseSSEStream(
 ): AsyncGenerator<SearchStreamEvent> {
   const reader = response.body?.getReader();
   if (!reader) {
-    throw new Error("No response body");
+    throw new SearchError("No response body", "NO_RESPONSE_BODY");
   }
 
   const decoder = new TextDecoder();
@@ -190,12 +265,22 @@ async function* parseSSEStream(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
+
+      // Prevent unbounded buffer growth
+      if (buffer.length > MAX_BUFFER_SIZE) {
+        throw new SearchError(
+          "Response too large",
+          "RESPONSE_TOO_LARGE"
+        );
+      }
+
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith("data: ")) {
+          const data = trimmedLine.slice(6).trim();
           if (data === "[DONE]") {
             return;
           }
@@ -203,8 +288,24 @@ async function* parseSSEStream(
             const event = JSON.parse(data) as SearchStreamEvent;
             yield event;
           } catch {
-            // Skip malformed JSON
+            // Skip malformed JSON but log in development
+            if (process.env.NODE_ENV === "development") {
+              console.warn("[Doc Search] Skipping malformed SSE data:", data);
+            }
           }
+        }
+      }
+    }
+
+    // Process any remaining data in buffer
+    if (buffer.trim().startsWith("data: ")) {
+      const data = buffer.trim().slice(6).trim();
+      if (data && data !== "[DONE]") {
+        try {
+          const event = JSON.parse(data) as SearchStreamEvent;
+          yield event;
+        } catch {
+          // Ignore malformed final chunk
         }
       }
     }
@@ -214,12 +315,35 @@ async function* parseSSEStream(
 }
 
 /**
+ * Determine if an error is retryable
+ */
+function isRetryableError(error: unknown, statusCode?: number): boolean {
+  // Network errors are retryable
+  if (error instanceof TypeError && error.message.includes("fetch")) {
+    return true;
+  }
+
+  // Specific status codes that are retryable
+  if (statusCode) {
+    return [408, 429, 500, 502, 503, 504].includes(statusCode);
+  }
+
+  // SearchError with retryable flag
+  if (error instanceof SearchError) {
+    return error.retryable;
+  }
+
+  return false;
+}
+
+/**
  * Fetch with streaming SSE support, falling back to regular JSON response
  */
 async function fetchWithStreaming(
   url: string,
   headers: HeadersInit,
-  dataStream: UIMessageStreamWriter<ChatMessage>
+  dataStream: UIMessageStreamWriter<ChatMessage>,
+  signal: AbortSignal
 ): Promise<SearchResponse> {
   const response = await fetch(url, {
     method: "GET",
@@ -227,15 +351,27 @@ async function fetchWithStreaming(
       ...headers,
       Accept: "text/event-stream, application/json",
     },
+    signal,
   });
 
+  // Handle rate limiting
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("Retry-After");
+    const waitTime = retryAfter ? parseInt(retryAfter, 10) * 1000 : 5000;
+    throw new SearchError(
+      `Rate limited. Retry after ${Math.ceil(waitTime / 1000)} seconds`,
+      "RATE_LIMITED",
+      true
+    );
+  }
+
   if (!response.ok) {
-    return {
-      results: [],
-      query: "",
-      totalResults: 0,
-      error: `API request failed with status ${response.status}: ${response.statusText}`,
-    };
+    const isRetryable = isRetryableError(null, response.status);
+    throw new SearchError(
+      `API request failed: ${response.status} ${response.statusText}`,
+      `HTTP_${response.status}`,
+      isRetryable
+    );
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -278,12 +414,7 @@ async function fetchWithStreaming(
             data: { message: event.message },
             transient: true,
           });
-          return {
-            results: [],
-            query: "",
-            totalResults: 0,
-            error: event.message,
-          };
+          throw new SearchError(event.message, "API_ERROR");
       }
     }
 
@@ -291,39 +422,126 @@ async function fetchWithStreaming(
       return finalResult;
     }
 
-    return {
-      results: [],
-      query: "",
-      totalResults: 0,
-      error: "No results received from stream",
-    };
+    throw new SearchError("No results received from stream", "EMPTY_STREAM");
   }
 
   // Fallback: Handle regular JSON response (non-streaming API)
-  const data = await response.json();
+  let data: Record<string, unknown>;
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    throw new SearchError(
+      "Failed to parse API response",
+      "PARSE_ERROR"
+    );
+  }
 
   // Normalize the response format
-  const results: SearchResult[] = (
-    data.results ||
-    data.documents ||
-    data.items ||
-    []
-  ).map((item: Record<string, unknown>) => ({
-    id: String(item.id || item._id || ""),
-    title: String(item.title || item.name || "Untitled"),
-    content: String(
-      item.content || item.text || item.body || item.snippet || ""
-    ),
-    url: item.url ? String(item.url) : undefined,
-    score: typeof item.score === "number" ? item.score : undefined,
-    metadata: item.metadata as Record<string, unknown> | undefined,
-  }));
+  const rawResults = data.results || data.documents || data.items || [];
+
+  if (!Array.isArray(rawResults)) {
+    throw new SearchError(
+      "Invalid API response format",
+      "INVALID_RESPONSE"
+    );
+  }
+
+  const results: SearchResult[] = rawResults.map(
+    (item: Record<string, unknown>) => ({
+      id: String(item.id || item._id || ""),
+      title: String(item.title || item.name || "Untitled"),
+      content: String(
+        item.content || item.text || item.body || item.snippet || ""
+      ),
+      url: item.url ? String(item.url) : undefined,
+      score: typeof item.score === "number" ? item.score : undefined,
+      metadata: item.metadata as Record<string, unknown> | undefined,
+    })
+  );
+
+  const query = String(data.query || "");
+  const totalResults =
+    typeof data.total === "number"
+      ? data.total
+      : typeof data.totalResults === "number"
+        ? data.totalResults
+        : results.length;
+
+  // Write completion event for JSON response (was missing!)
+  dataStream.write({
+    type: "data-searchComplete",
+    data: {
+      totalResults,
+      query,
+    },
+    transient: true,
+  });
 
   return {
     results,
-    query: data.query || "",
-    totalResults: data.total || data.totalResults || results.length,
+    query,
+    totalResults,
   };
+}
+
+/**
+ * Execute fetch with retry logic
+ */
+async function fetchWithRetry(
+  url: string,
+  headers: HeadersInit,
+  dataStream: UIMessageStreamWriter<ChatMessage>,
+  maxRetries: number = MAX_RETRIES
+): Promise<SearchResponse> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const { controller, timeoutId } = createTimeoutController(REQUEST_TIMEOUT_MS);
+
+    try {
+      const result = await fetchWithStreaming(url, headers, dataStream, controller.signal);
+      clearTimeout(timeoutId);
+      return result;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      const isRetryable =
+        error instanceof SearchError
+          ? error.retryable
+          : isRetryableError(error);
+
+      // Don't retry if not retryable or on last attempt
+      if (!isRetryable || attempt === maxRetries) {
+        throw lastError;
+      }
+
+      // Log retry attempt in development
+      if (process.env.NODE_ENV === "development") {
+        console.log(
+          `[Doc Search] Retry attempt ${attempt + 1}/${maxRetries} after error:`,
+          lastError.message
+        );
+      }
+
+      // Wait before retrying with exponential backoff
+      const backoffDelay = RETRY_DELAY_MS * Math.pow(2, attempt);
+      await delay(backoffDelay);
+
+      // Update progress to show retry
+      dataStream.write({
+        type: "data-searchProgress",
+        data: {
+          stage: "analyzing",
+          message: `Retrying search (attempt ${attempt + 2}/${maxRetries + 1})...`,
+          progress: 5,
+        },
+        transient: true,
+      });
+    }
+  }
+
+  throw lastError || new SearchError("Search failed after retries", "MAX_RETRIES");
 }
 
 export const searchDocuments = ({ dataStream }: SearchDocumentsProps) =>
@@ -331,25 +549,40 @@ export const searchDocuments = ({ dataStream }: SearchDocumentsProps) =>
     description:
       "Search for documents and information from the external documentation API. Use this tool to find relevant documentation, articles, or knowledge base entries based on a search query.",
     inputSchema: z.object({
-      query: z.string().describe("The search query to find relevant documents"),
+      query: z
+        .string()
+        .min(MIN_QUERY_LENGTH, `Query must be at least ${MIN_QUERY_LENGTH} character(s)`)
+        .max(MAX_QUERY_LENGTH, `Query must not exceed ${MAX_QUERY_LENGTH} characters`)
+        .describe("The search query to find relevant documents"),
       limit: z
         .number()
+        .int()
+        .min(1, "Limit must be at least 1")
+        .max(MAX_LIMIT, `Limit must not exceed ${MAX_LIMIT}`)
         .optional()
         .default(5)
         .describe("Maximum number of results to return (default: 5)"),
       filter: z
         .string()
+        .max(200, "Filter must not exceed 200 characters")
         .optional()
         .describe(
           "Optional filter to narrow down results (e.g., category, tag)"
         ),
     }),
     execute: async ({ query, limit = 5, filter }): Promise<SearchResponse> => {
+      const trimmedQuery = query.trim();
+
       try {
+        // Validate input
+        validateInput(trimmedQuery, limit);
+
         // Use mock mode for testing without API
         if (MOCK_MODE) {
-          console.log("[Doc Search] Running in mock mode");
-          return await mockSearch(query, limit, filter, dataStream);
+          if (process.env.NODE_ENV === "development") {
+            console.log("[Doc Search] Running in mock mode");
+          }
+          return await mockSearch(trimmedQuery, limit, filter, dataStream);
         }
 
         // Write initial progress event
@@ -364,13 +597,13 @@ export const searchDocuments = ({ dataStream }: SearchDocumentsProps) =>
         });
 
         const params = new URLSearchParams({
-          q: query,
+          q: trimmedQuery,
           limit: String(limit),
           stream: "true", // Request SSE streaming from the API
         });
 
         if (filter) {
-          params.append("filter", filter);
+          params.append("filter", filter.trim());
         }
 
         const headers: HeadersInit = {
@@ -381,34 +614,47 @@ export const searchDocuments = ({ dataStream }: SearchDocumentsProps) =>
           headers["Authorization"] = `Bearer ${DOC_API_KEY}`;
         }
 
-        const result = await fetchWithStreaming(
+        const result = await fetchWithRetry(
           `${DOC_API_BASE_URL}/search?${params}`,
           headers,
           dataStream
         );
 
         // Ensure query is set in result
-        result.query = query;
+        result.query = trimmedQuery;
 
         return result;
       } catch (error) {
+        const errorMessage =
+          error instanceof SearchError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : "Unknown error occurred";
+
+        const errorCode =
+          error instanceof SearchError ? error.code : "UNKNOWN_ERROR";
+
+        // Write error event to stream
         dataStream.write({
           type: "data-searchError",
           data: {
-            message:
-              error instanceof Error ? error.message : "Unknown error occurred",
+            message: errorMessage,
           },
           transient: true,
         });
 
+        // Log error in development
+        if (process.env.NODE_ENV === "development") {
+          console.error(`[Doc Search] Error (${errorCode}):`, errorMessage);
+        }
+
         return {
           results: [],
-          query,
+          query: trimmedQuery,
           totalResults: 0,
-          error:
-            error instanceof Error ? error.message : "Unknown error occurred",
+          error: errorMessage,
         };
       }
     },
   });
-
