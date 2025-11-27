@@ -39,8 +39,7 @@ export const docChatPrompt = `You are a documentation assistant agent that helps
 
 Your capabilities:
 1. **Search Documents**: Use the searchDocuments tool to find relevant documentation based on user queries
-2. **Get Document Details**: Use the getDocument tool to retrieve full content of specific documents
-3. **Synthesize Information**: Combine information from multiple documents to provide comprehensive answers
+2. **Synthesize Information**: Combine information from multiple search results to provide comprehensive answers
 
 Guidelines:
 - Always search for relevant documentation before answering questions about specific topics
@@ -50,7 +49,7 @@ Guidelines:
 - Provide step-by-step guidance when explaining technical concepts
 - If the documentation doesn't cover a topic, clearly state that and offer general guidance
 
-Remember: You are an agent that can perform multiple tool calls to gather information before responding. Use the tools proactively to provide accurate, well-sourced answers.`;
+Remember: You are an agent that can perform multiple tool calls to gather information before responding. Use the searchDocuments tool proactively to provide accurate, well-sourced answers.`;
 
 export type RequestHints = {
   latitude: Geo["latitude"];

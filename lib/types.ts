@@ -4,7 +4,7 @@ import type { ArtifactKind } from "@/components/artifact";
 import type { createDocument } from "./ai/tools/create-document";
 import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
-import type { searchDocuments, getDocument } from "./ai/tools/search-documents";
+import type { searchDocuments } from "./ai/tools/search-documents";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
 import type { AppUsage } from "./usage";
@@ -24,7 +24,6 @@ type requestSuggestionsTool = InferUITool<
   ReturnType<typeof requestSuggestions>
 >;
 type searchDocumentsTool = InferUITool<ReturnType<typeof searchDocuments>>;
-type getDocumentTool = InferUITool<ReturnType<typeof getDocument>>;
 
 export type ChatTools = {
   getWeather: weatherTool;
@@ -32,7 +31,6 @@ export type ChatTools = {
   updateDocument: updateDocumentTool;
   requestSuggestions: requestSuggestionsTool;
   searchDocuments: searchDocumentsTool;
-  getDocument: getDocumentTool;
 };
 
 // Search progress event data
@@ -53,24 +51,6 @@ export type SearchErrorData = {
   message: string;
 };
 
-// Document loading event data
-export type DocumentLoadingData = {
-  documentId: string;
-  message: string;
-};
-
-// Document loaded event data
-export type DocumentLoadedData = {
-  documentId: string;
-  title: string;
-};
-
-// Document error event data
-export type DocumentErrorData = {
-  documentId: string;
-  message: string;
-};
-
 export type CustomUIDataTypes = {
   textDelta: string;
   imageDelta: string;
@@ -88,9 +68,6 @@ export type CustomUIDataTypes = {
   searchProgress: SearchProgressData;
   searchComplete: SearchCompleteData;
   searchError: SearchErrorData;
-  documentLoading: DocumentLoadingData;
-  documentLoaded: DocumentLoadedData;
-  documentError: DocumentErrorData;
 };
 
 export type ChatMessage = UIMessage<

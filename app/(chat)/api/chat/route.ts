@@ -25,7 +25,7 @@ import { myProvider } from "@/lib/ai/providers";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
-import { searchDocuments, getDocument } from "@/lib/ai/tools/search-documents";
+import { searchDocuments } from "@/lib/ai/tools/search-documents";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
@@ -227,11 +227,10 @@ export async function POST(request: Request) {
             system: systemPrompt({ selectedChatModel, requestHints }),
             messages: convertToModelMessages(uiMessages),
             stopWhen: stepCountIs(10),
-            experimental_activeTools: ["searchDocuments", "getDocument"],
+            experimental_activeTools: ["searchDocuments"],
             experimental_transform: smoothStream({ chunking: "word" }),
             tools: {
               searchDocuments: searchDocuments({ dataStream }),
-              getDocument: getDocument({ dataStream }),
             },
             experimental_telemetry: {
               isEnabled: isProductionEnvironment,
