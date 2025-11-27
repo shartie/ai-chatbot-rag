@@ -4,6 +4,7 @@ import type { ArtifactKind } from "@/components/artifact";
 import type { createDocument } from "./ai/tools/create-document";
 import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
+import type { searchDocuments, getDocument } from "./ai/tools/search-documents";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
 import type { AppUsage } from "./usage";
@@ -22,12 +23,52 @@ type updateDocumentTool = InferUITool<ReturnType<typeof updateDocument>>;
 type requestSuggestionsTool = InferUITool<
   ReturnType<typeof requestSuggestions>
 >;
+type searchDocumentsTool = InferUITool<ReturnType<typeof searchDocuments>>;
+type getDocumentTool = InferUITool<ReturnType<typeof getDocument>>;
 
 export type ChatTools = {
   getWeather: weatherTool;
   createDocument: createDocumentTool;
   updateDocument: updateDocumentTool;
   requestSuggestions: requestSuggestionsTool;
+  searchDocuments: searchDocumentsTool;
+  getDocument: getDocumentTool;
+};
+
+// Search progress event data
+export type SearchProgressData = {
+  stage: "analyzing" | "filtering" | "searching" | "ranking" | "complete";
+  message: string;
+  progress?: number;
+};
+
+// Search completion event data
+export type SearchCompleteData = {
+  totalResults: number;
+  query: string;
+};
+
+// Search error event data
+export type SearchErrorData = {
+  message: string;
+};
+
+// Document loading event data
+export type DocumentLoadingData = {
+  documentId: string;
+  message: string;
+};
+
+// Document loaded event data
+export type DocumentLoadedData = {
+  documentId: string;
+  title: string;
+};
+
+// Document error event data
+export type DocumentErrorData = {
+  documentId: string;
+  message: string;
 };
 
 export type CustomUIDataTypes = {
@@ -43,6 +84,13 @@ export type CustomUIDataTypes = {
   clear: null;
   finish: null;
   usage: AppUsage;
+  // Doc Chat Agent custom data types
+  searchProgress: SearchProgressData;
+  searchComplete: SearchCompleteData;
+  searchError: SearchErrorData;
+  documentLoading: DocumentLoadingData;
+  documentLoaded: DocumentLoadedData;
+  documentError: DocumentErrorData;
 };
 
 export type ChatMessage = UIMessage<

@@ -230,8 +230,8 @@ export async function POST(request: Request) {
             experimental_activeTools: ["searchDocuments", "getDocument"],
             experimental_transform: smoothStream({ chunking: "word" }),
             tools: {
-              searchDocuments,
-              getDocument,
+              searchDocuments: searchDocuments({ dataStream }),
+              getDocument: getDocument({ dataStream }),
             },
             experimental_telemetry: {
               isEnabled: isProductionEnvironment,
