@@ -170,7 +170,7 @@ const PurePreviewMessage = ({
               const { toolCallId, state } = part;
 
               return (
-                <Tool defaultOpen={true} key={toolCallId}>
+                <Tool defaultOpen={false} key={toolCallId}>
                   <ToolHeader state={state} type="tool-getWeather" />
                   <ToolContent>
                     {state === "input-available" && (
@@ -239,7 +239,7 @@ const PurePreviewMessage = ({
               const { toolCallId, state } = part;
 
               return (
-                <Tool defaultOpen={true} key={toolCallId}>
+                <Tool defaultOpen={false} key={toolCallId}>
                   <ToolHeader state={state} type="tool-requestSuggestions" />
                   <ToolContent>
                     {state === "input-available" && (
@@ -272,7 +272,7 @@ const PurePreviewMessage = ({
               const { toolCallId, state } = part;
 
               return (
-                <Tool defaultOpen={true} key={toolCallId}>
+                <Tool defaultOpen={false} key={toolCallId}>
                   <ToolHeader state={state} type="tool-searchDocuments" />
                   <ToolContent>
                     {state === "input-available" && (

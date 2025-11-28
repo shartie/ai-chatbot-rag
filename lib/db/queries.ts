@@ -39,6 +39,7 @@ import { generateHashedPassword } from "./utils";
 // https://authjs.dev/reference/adapter/drizzle
 
 // biome-ignore lint: Forbidden non-null assertion.
+console.log("POSTGRES_URL configured:", process.env.POSTGRES_URL ? "yes" : "no");
 const client = postgres(process.env.POSTGRES_URL!);
 const db = drizzle(client);
 
@@ -72,7 +73,8 @@ export async function createGuestUser() {
       id: user.id,
       email: user.email,
     });
-  } catch (_error) {
+  } catch (error) {
+    console.error("createGuestUser error:", error);
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to create guest user"

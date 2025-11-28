@@ -1,4 +1,3 @@
-import { geolocation } from "@vercel/functions";
 import {
   convertToModelMessages,
   createUIMessageStream,
@@ -151,13 +150,11 @@ export async function POST(request: Request) {
 
     const uiMessages = [...convertToUIMessages(messagesFromDb), message];
 
-    const { longitude, latitude, city, country } = geolocation(request);
-
     const requestHints: RequestHints = {
-      longitude,
-      latitude,
-      city,
-      country,
+      longitude: undefined,
+      latitude: undefined,
+      city: undefined,
+      country: undefined,
     };
 
     await saveMessages({
